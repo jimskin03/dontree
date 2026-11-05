@@ -1,6 +1,7 @@
-# Architecture sketch
+# Dontree architecture sketch
 
 ## Goals
+0. Supported audio formats: MP3 and OGG only (required), played natively by Media3.
 1. Samsung Music-style local player (library, now-playing, queue, mini player, notification controls).
 2. Auto-detect the song title from the audio, then fetch album cover art.
 3. An insertable "lyrics agent" the user can switch on during playback. On demand it transcribes the song, shows lyrics synced to the beat, and shows English romanization.
@@ -14,6 +15,7 @@
 - Now Playing has an "Agent" button that slides in the lyrics panel.
 
 ### 2. Playback core (Media3 / ExoPlayer)
+- **Supported audio formats: MP3 and OGG (required).** Media3 plays both natively, so no extra decoders are needed. No other formats are in scope for now; the library scan only indexes `.mp3` and `.ogg` files.
 - `MediaSessionService` for background play, lock screen and notification controls.
 - Exposes a tap on the decoded PCM stream (an `AudioProcessor`) so other modules can listen without a second decode.
 
