@@ -30,6 +30,8 @@
 - Images cached on disk (Coil) and stored in Room.
 
 ### 5. Insertable agent ("Lyrics Agent")
+**Local-only rule: the agent uses no LLM and makes no cloud calls.** Everything it does runs on the phone, and no audio or text leaves the device.
+
 A plug-in module behind a small interface so it can be inserted on demand and removed again:
 ```
 interface PlayerAgent {
@@ -37,44 +39,31 @@ interface PlayerAgent {
   fun onDetach()
 }
 ```
-When attached it runs this pipeline:
-1. Lyrics lookup first: LRCLIB / other synced-lyrics sources by title+artist+duration (cheap, accurate).
-2. If none found, transcribe:
-   - Optional vocal separation (on-device Demucs-style model or server) to improve accuracy.
-   - Speech-to-text with word timestamps: Whisper (on-device via whisper.cpp for short use, or a server endpoint for quality). Thai model/language hint set to `th`.
-3. Alignment: word/line timestamps from step 1 (LRC) or 2 (Whisper) become a timeline.
-4. Beat sync: on-device beat/onset tracking (e.g. librosa-style analysis ported, or a TFLite beat tracker) produces beat times and tempo. Line highlights snap to the nearest beat and the UI pulses on the beat.
-5. Romanization (see below).
-6. Result is cached per song so the agent only works once.
-
-### 6. Language layer (Thai first)
-```
-interface LanguagePack {
-  val code: String            // "th"
-  fun segment(text): List<Word>      // Thai has no spaces between words
-  fun romanize(word): String         // English-letter reading
-}
-```
-- Thai pack: word segmentation (PyThaiNLP-style dictionary segmenter; on Android, a ported dictionary + maximal-matching or ICU `BreakIterator` for Thai), romanization via the Royal Thai General System of Transcription (RTGS), with an option for a tone-aware scheme later.
-- Later packs (Japanese, Korean, Chinese...) implement the same interface; Whisper language code selects the transcriber.
+When attached it runs this pipeline, all on-device:
+1. Transcription: Whisper running locally (whisper.cpp or an equivalent on-device runtime) with the language set to Thai (`th`). It produces text with word-level timestamps. Model size is chosen to fit the phone (e.g. small/base, quantized).
+2. Translation: a local Thai-to-English translation model (small offline neural MT model, e.g. an OPUS-MT or NLLB-style model converted for on-device use). It is a dedicated translation model, not an LLM.
+3. Romanization: rule-based Royal Thai General System of Transcription (RTGS) applied to the segmented Thai words. No model needed.
+4. Beat tracking: on-device signal processing only (onset detection and tempo/beat tracking on the audio, no neural model required). It produces beat times and tempo.
+5. Sync: the word timestamps from Whisper are snapped to the nearest beat, and the UI pulses on the beat. Lyrics lines show Thai, romanization and English translation together.
+6. Results are cached per song in the local database so the agent only works once per track.
 
 ### 7. Data and services
 - Local: Room (songs, cover URLs, lyrics, beat maps, romanization), DataStore (settings).
-- Optional backend (small service) for heavy jobs: vocal separation + Whisper large. The app works fully offline with smaller on-device models.
-- Privacy: only a short audio fingerprint or a vocal clip leaves the phone, and only when the agent is switched on.
+- Privacy: the agent is fully local. Nothing it processes (audio, transcripts, translations) is sent anywhere.
 
 ## Data flow
-play song -> Media3 -> tags/fingerprint -> MusicBrainz ID -> cover art + metadata -> (user taps Agent) -> lyrics lookup or transcription -> beat map -> romanization -> synced lyrics view.
+play song -> Media3 -> tags/fingerprint -> MusicBrainz ID -> cover art + metadata -> (user taps Agent) -> local Whisper transcription -> local Thai-to-English translation + RTGS romanization -> on-device beat map -> synced lyrics view.
 
 ## Build order
 1. Basic player UI + Media3 playback.
 2. Tag reading, fingerprint ID, cover art.
-3. Agent interface + lyrics lookup + synced display.
-4. Whisper transcription fallback (Thai).
+3. Agent interface + synced display.
+4. Local Whisper transcription (Thai) + local translation model.
 5. Beat sync and pulse animation.
 6. Thai romanization.
 7. Additional language packs.
 
 ## Open questions
-- Quality bar for on-device vs server transcription of sung Thai.
+- Quality of on-device Whisper on sung Thai (model size vs speed and memory).
+- Note: song identification and cover art (sections 3 and 4) still look up online services (AcoustID/MusicBrainz, Cover Art Archive). The local-only rule covers the agent. If the whole app must work offline, those need a local alternative.
 - Licensing of lyrics sources and recognition APIs.
