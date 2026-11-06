@@ -31,6 +31,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     val message = MutableStateFlow<String?>(null)
     val metadata = MutableStateFlow<MetadataRow?>(null)
     val identifying = MutableStateFlow(false)
+    var pendingLyricsTarget: Song? = null
     private var agentJob: Job? = null
     private var importJob: Job? = null
     private var identifyJob: Job? = null
@@ -38,13 +39,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         viewModelScope.launch {
-            player.state.map { it.id }.distinctUntilChanged().collectLatest {
+            combine(player.state.map { it.id }.distinctUntilChanged(), songs) { id, library ->
+                id to library.firstOrNull { it.id.toString() == id }
+            }.distinctUntilChangedBy { (id, song) -> id to song?.revision }.collectLatest { (_, song) ->
                 stopAgent(); agentState.value = AgentState(); metadata.value = null
                 identifyJob?.cancel(); identifying.value = false
-                val song = songs.value.firstOrNull { it.id.toString() == player.state.value.id }
                 if (song != null) {
                     val cached = app.music.dao.lyrics("import:${song.revision}")
-                    if (cached != null) agentState.value = AgentState(lyrics = LyricsJson.decode(cached.json))
+                    if (cached != null && !agentState.value.busy) agentState.value = AgentState(lyrics = LyricsJson.decode(cached.json))
                 }
             }
         }

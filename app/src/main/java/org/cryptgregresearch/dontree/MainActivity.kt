@@ -14,14 +14,12 @@ import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
 import androidx.media3.common.util.UnstableApi
 import androidx.compose.runtime.mutableStateOf
-import org.cryptgregresearch.dontree.core.Song
 import org.cryptgregresearch.dontree.ui.Dontree
 
 @UnstableApi
 class MainActivity : ComponentActivity() {
     private val model: PlayerViewModel by viewModels()
     private val granted = mutableStateOf(false)
-    private var lyricsTarget: Song? = null
     private val permission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
         granted.value = allowed
         if (allowed) model.refresh()
@@ -29,7 +27,7 @@ class MainActivity : ComponentActivity() {
     }
     private val modelPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(model::importModel) }
     private val lyricsPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        val song = lyricsTarget; lyricsTarget = null
+        val song = model.pendingLyricsTarget; model.pendingLyricsTarget = null
         if (uri != null && song != null) model.importLyrics(uri, song)
     }
     private val audioPermission get() = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
@@ -42,7 +40,7 @@ class MainActivity : ComponentActivity() {
                 onPermission = { permission.launch(audioPermission) },
                 onAppSettings = { startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:$packageName"))) },
                 onModelImport = { modelPicker.launch(arrayOf("*/*")) },
-                onLyricsImport = { model.currentSong()?.let { lyricsTarget = it; lyricsPicker.launch(arrayOf("*/*")) } })
+                onLyricsImport = { model.currentSong()?.let { model.pendingLyricsTarget = it; lyricsPicker.launch(arrayOf("*/*")) } })
         }
     }
     override fun onResume() {

@@ -33,12 +33,16 @@ class PlayerConnection(context: Context, private val scope: CoroutineScope) : Au
         future.addListener({
             runCatching { future.get() }.onSuccess { player ->
                 controller = player; player.addListener(listener); update()
-                ticker = scope.launch { while (isActive) { update(); delay(100) } }
+                ticker = scope.launch { while (isActive) { update(positionOnly = true); delay(100) } }
             }.onFailure { state.value = state.value.copy(error = "Could not connect to playback. Reopen Dontree to retry.") }
         }, ContextCompat.getMainExecutor(context))
     }
-    private fun update() {
+    private fun update(positionOnly: Boolean = false) {
         val p = controller ?: return
+        if (positionOnly) {
+            state.value = state.value.copy(position = p.currentPosition.coerceAtLeast(0), duration = p.duration.coerceAtLeast(0))
+            return
+        }
         state.value = PlayerState(true, p.currentMediaItem?.mediaId, p.mediaMetadata.title?.toString() ?: "",
             p.mediaMetadata.artist?.toString() ?: "", p.mediaMetadata.artworkUri?.toString(), p.isPlaying,
             p.currentPosition.coerceAtLeast(0), p.duration.coerceAtLeast(0), p.shuffleModeEnabled, p.repeatMode,

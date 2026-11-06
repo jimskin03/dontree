@@ -5,6 +5,8 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -26,6 +28,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -41,7 +44,6 @@ import org.cryptgregresearch.dontree.PlayerViewModel
 import org.cryptgregresearch.dontree.core.*
 import org.cryptgregresearch.dontree.data.Preferences
 import org.cryptgregresearch.dontree.playback.PlayerState
-import kotlin.math.abs
 
 private val Purple = Color(0xFFB6A0FF)
 private val Mint = Color(0xFF90E0C4)
@@ -343,6 +345,8 @@ private fun SettingsScreen(vm: PlayerViewModel, prefs: Preferences, back: () -> 
     val importing by vm.importing.collectAsStateWithLifecycle()
     var key by remember(prefs.acoustIdKey) { mutableStateOf(prefs.acoustIdKey) }
     var confirmClear by remember { mutableStateOf(false) }
+    var licenses by remember { mutableStateOf(false) }
+    val context = LocalContext.current
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 32.dp)) {
         item { Header("Settings", back) }
         item {
@@ -376,6 +380,7 @@ private fun SettingsScreen(vm: PlayerViewModel, prefs: Preferences, back: () -> 
                 Text("Cryptgreg Research · ${BuildConfig.VERSION_NAME}", color = Muted, fontSize = 13.sp)
                 Text("MP3 & OGG · Android 10+", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                 Text("Powered by Android Media3, whisper.cpp and Chromaprint. See the repository's third-party notices and model licenses.", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(top = 12.dp))
+                TextButton({ licenses = true }) { Text("Native library licenses") }
             }
         }
     }
@@ -383,6 +388,14 @@ private fun SettingsScreen(vm: PlayerViewModel, prefs: Preferences, back: () -> 
         text = { Text("Imported LRC files will need to be imported again. Generated lyrics can be recreated with your local model.") },
         confirmButton = { TextButton({ confirmClear = false; vm.clearLyrics() }) { Text("Clear lyrics") } },
         dismissButton = { TextButton({ confirmClear = false }) { Text("Cancel") } })
+    if (licenses) {
+        val notices = remember { listOf("whisper", "chromaprint", "kissfft").joinToString("\n\n") { name ->
+            context.assets.open("licenses/$name.txt").bufferedReader().use { it.readText() }
+        } }
+        AlertDialog(onDismissRequest = { licenses = false }, title = { Text("Native library licenses") },
+            text = { Text(notices, fontSize = 11.sp, modifier = Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) },
+            confirmButton = { TextButton({ licenses = false }) { Text("Close") } })
+    }
 }
 
 @Composable

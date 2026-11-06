@@ -20,6 +20,16 @@ class MusicTest {
     @Test fun `bilingual duplicate timestamps form one line`() {
         assertEquals("ไทย\nEnglish", LrcParser.parse("[00:01]ไทย\n[00:01]English", 3000).lines.single().text)
     }
+    @Test fun `last imported line ends at track end even when less than five seconds remain`() {
+        assertEquals(60_000L, LrcParser.parse("[00:59.5]End", 60_000).lines.single().endMs)
+    }
+    @Test fun `lrc drops out of range stamps and clamps negative offset`() {
+        val lines = LrcParser.parse("[offset:-2000]\n[00:01]Start\n[02:00]Outside", 60_000).lines
+        assertEquals(1, lines.size); assertEquals(0L, lines.single().startMs)
+    }
+    @Test fun `equal beat distances preserve deterministic earlier beat`() {
+        assertEquals(1000L, Timeline.snap(1050, listOf(1000, 1100)))
+    }
     @Test(expected = IllegalArgumentException::class) fun `untimed lyrics rejected`() { LrcParser.parse("[ar:Artist]\nNo time", 1000) }
     @Test fun `timeline supports seeking backwards and gaps`() {
         val lines = listOf(LyricLine(1000, 2000, "A"), LyricLine(3000, 4000, "B"))
