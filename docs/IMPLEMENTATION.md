@@ -21,7 +21,7 @@ The architecture sketch describes the target, not a claim that every component i
 
 - Core JUnit tests exercise extension filtering, metadata fallback, LRC offsets/duplicate timestamps, seeking/gaps, bounded beat snapping, and silence/click-track beat detection.
 - Local Android Kotlin/Compose source compilation was checked directly against SDK 35 and Android dependencies. This checks source types but does not replace Gradle/KSP/resource packaging.
-- Native CMake build is checked separately for the packaged ABIs.
+- Native CMake builds passed for ARM64 and x86_64, including the dynamically linked Chromaprint library. ARM64 ELF load segments have 16 KB alignment.
 - The full Gradle build and ADB cannot connect to local services in the restricted development environment. GitHub Actions is configured to run `:core:test :app:lintDebug :app:assembleDebug`. Consult its actual result before treating an APK as verified.
 - Physical-device playback, notification behavior, import validation, inference speed/quality, and offline packet inspection remain device acceptance tests.
 
