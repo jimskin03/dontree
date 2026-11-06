@@ -1,0 +1,12 @@
+.gradle/
+.kotlin/
+.idea/
+**/build/
+**/.cxx/
+local.properties
+.deps/
+*.iml
+*.jks
+*.keystore
+*.bin
+!gradle/wrapper/gradle-wrapper.jar
