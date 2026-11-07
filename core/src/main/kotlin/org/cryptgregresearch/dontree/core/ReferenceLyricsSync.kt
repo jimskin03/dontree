@@ -17,10 +17,14 @@ object ReferenceLyricsSync {
             }
         }
         var cursor = 0
+        var remainingCells = 12_000_000L
         val lines = reference.lines.map { line ->
             val query = LyricsMatching.normalize(line.text)
             val window = text.substring(cursor, minOf(text.length, cursor + 1200))
-            val match = locate(query, window)
+            val cost = query.length.toLong() * window.length
+            val allowApproximate = cost <= remainingCells
+            if (allowApproximate) remainingCells -= cost
+            val match = locate(query, window, allowApproximate)
             if (match == null) line.copy(startMs = -1, endMs = -1, words = emptyList())
             else {
                 val start = starts[cursor + match.first]
@@ -33,12 +37,12 @@ object ReferenceLyricsSync {
         return reference.copy(lines = lines, beats = beats.toList(), source = "$source · local timing is approximate")
     }
 
-    private fun locate(query: String, text: String): IntRange? {
+    private fun locate(query: String, text: String, allowApproximate: Boolean): IntRange? {
         if (query.isEmpty() || text.isEmpty() || query.length > 500) return null
         val exact = text.indexOf(query)
         if (exact >= 0) return exact until exact + query.length
         // Semi-global edit distance: allow missing/misheard characters without assuming spaces in Thai.
-        if (query.length < 5) return null
+        if (query.length < 5 || !allowApproximate) return null
         var previous = IntArray(text.length + 1)
         var previousStart = IntArray(text.length + 1) { it }
         for (i in query.indices) {

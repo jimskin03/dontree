@@ -17,7 +17,8 @@ object LyricsMatching {
         .filter {
             normalize(song.title).isNotEmpty() && normalize(song.artist).isNotEmpty() &&
                 normalize(it.title) == normalize(song.title) && normalize(it.artist) == normalize(song.artist) &&
-                abs(it.durationMs - song.durationMs) <= 5000 && (it.lyrics.instrumental || it.lyrics.lines.isNotEmpty())
+                it.durationMs > 0 && song.durationMs > 0 && abs(it.durationMs - song.durationMs) <= 5000 &&
+                (it.lyrics.instrumental || it.lyrics.lines.isNotEmpty())
         }
         .sortedWith(compareByDescending<LyricsCandidate> { it.lyrics.fullySynced }
             .thenBy { abs(it.durationMs - song.durationMs) })

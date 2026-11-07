@@ -55,6 +55,7 @@ class OnlineLyrics {
                 // Credentials stay on the configured origin, including when a service redirects.
                 connection.instanceFollowRedirects = false
                 connection.setRequestProperty("User-Agent", "Dontree/0.1 (https://github.com/jimskin03/dontree)")
+                connection.setRequestProperty("Accept", "application/json")
                 if (apiKey.isNotBlank()) connection.setRequestProperty("Authorization", "Bearer $apiKey")
                 check(connection.responseCode == 200) {
                     when (connection.responseCode) {

@@ -48,7 +48,9 @@ class LocalLyricsAgent(
             }
             onProgress(update.copy(progress = update.progress.replace("Listening locally", "Syncing found lyrics"), lyrics = aligned))
         }
-        return ReferenceLyricsSync.align(reference, recognized.lines, recognized.beats)
+        return withContext(Dispatchers.Default) {
+            ReferenceLyricsSync.align(reference, recognized.lines, recognized.beats)
+        }
     }
 
     override suspend fun onAttach(session: PlaybackSession, onProgress: (AgentUpdate) -> Unit): Lyrics = work.withLock {
