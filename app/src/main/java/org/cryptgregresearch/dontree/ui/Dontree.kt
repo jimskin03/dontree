@@ -406,7 +406,7 @@ private fun LyricsPanel(
                 OutlinedButton(stop, modifier = Modifier.padding(bottom = 16.dp)) { Text("Detach agent") }
             } else {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    TextButton(start, enabled = !modelImporting) { Text("Find lyrics again") }
+                    TextButton(start, enabled = !modelImporting) { Text(if (prefs.lyricsOnline) "Find lyrics again" else "Find lyrics online") }
                     TextButton(importLyrics) { Text("Replace with LRC") }
                 }
                 if (agent.lyrics?.fullySynced == false) {

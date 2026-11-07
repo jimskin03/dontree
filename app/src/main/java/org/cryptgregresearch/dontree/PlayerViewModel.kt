@@ -81,7 +81,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     fun onLyricsOpen() {
         viewModelScope.launch {
             val song = currentSong() ?: return@launch
-            if (agentState.value.busy || agentState.value.lyrics != null) return@launch
+            if (agentState.value.busy) return@launch
             val cached = app.music.dao.lyrics("import:${song.revision}") ?: app.music.dao.lyrics("resolved:${song.revision}")
             if (currentSong()?.revision != song.revision || agentState.value.busy) return@launch
             if (cached != null) agentState.value = AgentState(lyrics = LyricsJson.decode(cached.json))
