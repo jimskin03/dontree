@@ -38,7 +38,7 @@ interface MusicDao {
 abstract class MusicDatabase : RoomDatabase() { abstract fun music(): MusicDao }
 
 object LyricsJson {
-    fun encode(lyrics: Lyrics): String = JSONObject().put("source", lyrics.source)
+    fun encode(lyrics: Lyrics): String = JSONObject().put("source", lyrics.source).put("instrumental", lyrics.instrumental)
         .put("beats", JSONArray(lyrics.beats)).put("lines", JSONArray().apply {
             lyrics.lines.forEach { line -> put(JSONObject().put("start", line.startMs).put("end", line.endMs)
                 .put("text", line.text).put("romanization", line.romanization).put("translation", line.translation)
@@ -56,6 +56,6 @@ object LyricsJson {
                 line.optString("romanization"), line.optString("translation"), (0 until words.length()).map { j ->
                     val word = words.getJSONObject(j); Word(word.getLong("start"), word.getLong("end"), word.getString("text"))
                 })
-        }, (0 until beats.length()).map { beats.getLong(it) }, root.getString("source"))
+        }, (0 until beats.length()).map { beats.getLong(it) }, root.getString("source"), root.optBoolean("instrumental"))
     }
 }

@@ -2,6 +2,8 @@
 
 The architecture sketch describes the target, not a claim that every component is finished. This first implementation uses native Android components and actual local inference; there are no placeholder lyrics or simulated model results.
 
+Issue #4 changes the lyrics entry point to song matching and provider lookup. Existing synchronized lyrics bypass local inference. Plain lyrics are retained and optionally aligned with local recognition. Local transcription handles lookup misses or an explicit offline fallback request. The user can configure a compatible HTTPS lyrics service and Bearer API key. See [lyrics lookup](LYRICS.md) for setup and privacy details.
+
 | Area | Implemented | Remaining / difference from sketch |
 | --- | --- | --- |
 | Library | MediaStore MP3/OGG-only scan, embedded metadata exposed by Android, filename fallback, album/artist groups, search and favorites | File/tag editing and playlists are outside the sketch |

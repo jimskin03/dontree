@@ -1,6 +1,6 @@
 # Set up offline transcription in Dontree
 
-Download and import a Whisper model once to generate Thai lyrics on your phone. After the import, you can transcribe songs without an internet connection.
+Download and import a Whisper model once for local lyric timing and offline fallback transcription. Dontree first looks for existing lyrics online. Synced lyrics work immediately, and the model helps align untimed lyrics. [Learn about lyrics lookup](LYRICS.md).
 
 ## 1. Download a model
 
@@ -17,7 +17,7 @@ Use the exact `.bin` file from the table. Files ending in `.en.bin` support Engl
 
 ## 2. Import the file in Dontree
 
-1. From **My music**, open **Settings** and find **Offline transcription**. You can also tap **Set up offline transcription** in the lyrics agent.
+1. From **My music**, open **Settings** and find **Offline transcription** under **Local sync and fallback**. You can also tap **Set up local sync and fallback** in the lyrics agent.
 2. Tap **Import model**. If you already have a model, tap **Replace model**.
 3. In the Android file picker, open **Downloads** and select `ggml-tiny.bin` or `ggml-base.bin`.
 4. Wait for **Whisper model ready**. Dontree makes its own copy, so you can delete the original from Downloads once the model is ready.
@@ -25,7 +25,7 @@ Use the exact `.bin` file from the table. Files ending in `.en.bin` support Engl
 ## 3. Transcribe a song
 
 1. Play an MP3 or OGG file and tap the mini player to open the full player.
-2. Tap **Lyrics agent**, then **Attach lyrics agent**. If you already imported timed lyrics for this song, tap **Run agent**.
+2. Tap **Lyrics agent**, then **Use local transcription fallback** to work offline. For untimed lyrics already found online, tap **Sync with local model**.
 3. Keep Dontree open while it works. Processing can take several minutes, and the agent supports tracks up to 20 minutes. Tap **Detach agent** to cancel.
 
 Generated words and timing can be imperfect, especially when vocals are hard to hear over the music. You can also use **Import a timed LRC file** if you have one.

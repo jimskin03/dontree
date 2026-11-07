@@ -35,6 +35,21 @@ class DeviceSmokeTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context get() = instrumentation.targetContext
 
+    @Test fun providerLyricsAndLegacyCacheRemainReadable() {
+        val response = """[{"trackName":"Test","artistName":"Artist","duration":10,
+            "instrumental":false,"syncedLyrics":"[00:01]Test line","plainLyrics":"Test line"},
+            {"trackName":"Test","artistName":"Artist","duration":10,"plainLyrics":"Original words"}]"""
+        val candidates = OnlineLyrics().parse(response, 10_000, "Test provider")
+        assertTrue(candidates[0].lyrics.fullySynced)
+        assertFalse(candidates[1].lyrics.fullySynced)
+        assertEquals("Original words", candidates[1].lyrics.lines.single().text)
+        val legacy = """{"source":"Imported LRC","lines":[{"start":100,"end":900,"text":"Legacy"}]}"""
+        assertEquals("Legacy", LyricsJson.decode(legacy).lines.single().text)
+        assertFalse(LyricsJson.decode(legacy).instrumental)
+        val instrumental = Lyrics(emptyList(), source = "Provider", instrumental = true)
+        assertEquals(instrumental, LyricsJson.decode(LyricsJson.encode(instrumental)))
+    }
+
     private fun fixture(name: String): File = File(context.cacheDir, name).also { file ->
         instrumentation.context.assets.open(name).use { source -> file.outputStream().use(source::copyTo) }
     }
