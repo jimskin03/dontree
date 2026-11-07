@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -50,6 +51,7 @@ private val Mint = Color(0xFF90E0C4)
 private val Background = Color(0xFF101116)
 private val Panel = Color(0xFF1C1D26)
 private val Muted = Color(0xFFA8A5B7)
+private const val TinyModelUrl = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin?download=true"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @UnstableApi
@@ -59,14 +61,23 @@ fun Dontree(vm: PlayerViewModel, permission: Boolean, onPermission: () -> Unit, 
     val playback by vm.player.state.collectAsStateWithLifecycle()
     val preferences by vm.preferences.collectAsStateWithLifecycle()
     val agent by vm.agentState.collectAsStateWithLifecycle()
+    val modelReady by vm.modelReady.collectAsStateWithLifecycle()
+    val modelImporting by vm.importing.collectAsStateWithLifecycle()
     val scanning by vm.scanning.collectAsStateWithLifecycle()
     val message by vm.message.collectAsStateWithLifecycle()
     var screen by rememberSaveable { mutableStateOf("library") }
+    var settingsBackScreen by rememberSaveable { mutableStateOf("library") }
     var lyricsOpen by rememberSaveable { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(message) { message?.let { snackbar.showSnackbar(it); vm.message.value = null } }
     LaunchedEffect(playback.error) { playback.error?.let { snackbar.showSnackbar(it) } }
-    BackHandler(screen != "library") { screen = if (screen == "queue") "player" else "library" }
+    BackHandler(screen != "library") {
+        screen = when (screen) {
+            "queue" -> "player"
+            "settings" -> settingsBackScreen
+            else -> "library"
+        }
+    }
 
     MaterialTheme(colorScheme = darkColorScheme(primary = Purple, secondary = Mint, background = Background, surface = Background, surfaceVariant = Panel, onSurfaceVariant = Muted)) {
         Scaffold(
@@ -76,7 +87,10 @@ fun Dontree(vm: PlayerViewModel, permission: Boolean, onPermission: () -> Unit, 
                     if (playback.id != null) MiniPlayer(playback, { screen = "player" }, vm.player::toggle, vm.player::next)
                     NavigationBar(containerColor = Background, windowInsets = WindowInsets(0)) {
                         NavigationBarItem(true, {}, { Icon(Icons.Rounded.LibraryMusic, null) }, label = { Text("My music") })
-                        NavigationBarItem(false, { screen = "settings" }, { Icon(Icons.Rounded.Settings, null) }, label = { Text("Settings") })
+                        NavigationBarItem(false, {
+                            settingsBackScreen = "library"
+                            screen = "settings"
+                        }, { Icon(Icons.Rounded.Settings, null) }, label = { Text("Settings") })
                     }
                 }
             },
@@ -87,12 +101,27 @@ fun Dontree(vm: PlayerViewModel, permission: Boolean, onPermission: () -> Unit, 
                         vm::refresh, { list, i -> vm.player.play(list, i) }, vm::favorite)
                     "player" -> NowPlaying(vm, playback, preferences, agent, { screen = "library" }, { screen = "queue" }, { lyricsOpen = true }, onLyricsImport)
                     "queue" -> Queue(playback, { screen = "player" }, vm.player::queuePlay, vm.player::remove, vm.player::move)
-                    "settings" -> SettingsScreen(vm, preferences, { screen = "library" }, onModelImport)
+                    "settings" -> SettingsScreen(vm, preferences, modelReady, modelImporting, { screen = settingsBackScreen }, onModelImport)
                 }
             }
         }
         if (lyricsOpen) ModalBottomSheet(onDismissRequest = { lyricsOpen = false }, containerColor = Background) {
-            LyricsPanel(agent, playback, preferences, vm::startAgent, vm::stopAgent, onLyricsImport, vm.player::seek)
+            LyricsPanel(
+                agent = agent,
+                player = playback,
+                prefs = preferences,
+                modelReady = modelReady,
+                modelImporting = modelImporting,
+                setupModel = {
+                    lyricsOpen = false
+                    settingsBackScreen = "player"
+                    screen = "settings"
+                },
+                start = vm::startAgent,
+                stop = vm::stopAgent,
+                importLyrics = onLyricsImport,
+                seek = vm.player::seek,
+            )
         }
     }
 }
@@ -288,7 +317,18 @@ private fun Queue(player: PlayerState, back: () -> Unit, play: (Int) -> Unit, re
 }
 
 @Composable
-private fun LyricsPanel(agent: AgentState, player: PlayerState, prefs: Preferences, start: () -> Unit, stop: () -> Unit, importLyrics: () -> Unit, seek: (Long) -> Unit) {
+private fun LyricsPanel(
+    agent: AgentState,
+    player: PlayerState,
+    prefs: Preferences,
+    modelReady: Boolean,
+    modelImporting: Boolean,
+    setupModel: () -> Unit,
+    start: () -> Unit,
+    stop: () -> Unit,
+    importLyrics: () -> Unit,
+    seek: (Long) -> Unit,
+) {
     val lines = agent.lyrics?.lines.orEmpty()
     val active = Timeline.activeIndex(lines, player.position)
     val list = rememberLazyListState()
@@ -310,14 +350,31 @@ private fun LyricsPanel(agent: AgentState, player: PlayerState, prefs: Preferenc
             Text(agent.progress, color = Muted, modifier = Modifier.padding(vertical = 16.dp))
             OutlinedButton(stop) { Text("Detach agent") }
         } else if (lines.isEmpty()) {
-            Spacer(Modifier.height(24.dp))
-            Text("Hear the words.\nFind their meaning.", fontSize = 30.sp, lineHeight = 38.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(16.dp))
-            Text(agent.error ?: "Analyze this track with a local Thai speech model. Audio stays on your phone. Songs can take several minutes to process.", color = Muted)
-            Spacer(Modifier.height(24.dp))
-            Button(start, enabled = player.id != null, modifier = Modifier.fillMaxWidth()) { Text("Attach lyrics agent") }
-            TextButton(importLyrics, modifier = Modifier.fillMaxWidth()) { Text("Import a timed LRC file") }
-            Text("A multilingual Whisper model is required for analysis. Import one in Settings. Generated words and timing may be inaccurate, especially over music.", color = Muted, fontSize = 11.sp)
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(vertical = 16.dp)) {
+                Text("Generate Thai lyrics", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    when {
+                        modelImporting -> "Wait for the model import to finish in Settings."
+                        !modelReady -> "Download and import a Whisper model once. Dontree can then transcribe songs offline."
+                        else -> agent.error ?: "Keep Dontree open while it transcribes this song. Processing can take several minutes."
+                    },
+                    color = Muted,
+                )
+                Spacer(Modifier.height(20.dp))
+                Button(
+                    onClick = if (modelReady) start else setupModel,
+                    enabled = !modelImporting && (!modelReady || player.id != null),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(when {
+                        modelImporting -> "Importing model…"
+                        modelReady -> "Attach lyrics agent"
+                        else -> "Set up offline transcription"
+                    })
+                }
+                TextButton(importLyrics, modifier = Modifier.fillMaxWidth()) { Text("Import a timed LRC file") }
+            }
         } else {
             LazyColumn(state = list, modifier = Modifier.weight(1f), contentPadding = PaddingValues(vertical = 16.dp)) {
                 itemsIndexed(lines) { index, line ->
@@ -330,7 +387,9 @@ private fun LyricsPanel(agent: AgentState, player: PlayerState, prefs: Preferenc
                 }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                TextButton(start) { Text("Run agent") }
+                TextButton(if (modelReady) start else setupModel, enabled = !modelImporting) {
+                    Text(if (modelReady) "Run agent" else "Set up model")
+                }
                 TextButton(importLyrics) { Text("Replace with LRC") }
             }
             Text("Pronunciation and beat alignment are approximate. Tap a line to seek.", color = Muted, fontSize = 10.sp, modifier = Modifier.padding(bottom = 16.dp))
@@ -340,9 +399,14 @@ private fun LyricsPanel(agent: AgentState, player: PlayerState, prefs: Preferenc
 
 @UnstableApi
 @Composable
-private fun SettingsScreen(vm: PlayerViewModel, prefs: Preferences, back: () -> Unit, importModel: () -> Unit) {
-    val ready by vm.modelReady.collectAsStateWithLifecycle()
-    val importing by vm.importing.collectAsStateWithLifecycle()
+private fun SettingsScreen(
+    vm: PlayerViewModel,
+    prefs: Preferences,
+    modelReady: Boolean,
+    modelImporting: Boolean,
+    back: () -> Unit,
+    importModel: () -> Unit,
+) {
     var key by remember(prefs.acoustIdKey) { mutableStateOf(prefs.acoustIdKey) }
     var confirmClear by remember { mutableStateOf(false) }
     var licenses by remember { mutableStateOf(false) }
@@ -352,17 +416,10 @@ private fun SettingsScreen(vm: PlayerViewModel, prefs: Preferences, back: () -> 
         item {
             Column(Modifier.padding(24.dp)) {
                 SectionLabel("LYRICS AGENT")
-                Text("A little intelligence.\nEntirely on your phone.", fontSize = 26.sp, lineHeight = 34.sp, fontWeight = FontWeight.Bold)
+                Text("Offline transcription", fontSize = 26.sp, lineHeight = 34.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(16.dp))
-                Text("Import a whisper.cpp multilingual tiny or base GGML .bin model. English-only (.en) models cannot transcribe Thai. Nothing is downloaded automatically.", color = Muted, fontSize = 13.sp)
-                Spacer(Modifier.height(16.dp))
-                Surface(color = Panel, shape = RoundedCornerShape(18.dp)) {
-                    Column(Modifier.fillMaxWidth().padding(18.dp)) {
-                        Text(if (ready) "Whisper model ready" else "No speech model installed", fontWeight = FontWeight.SemiBold)
-                        Text(if (importing) "Importing and validating model…" else "Up to 512 MB · multilingual GGML", color = Muted, fontSize = 12.sp)
-                        if (importing) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 12.dp))
-                        TextButton(importModel, enabled = !importing) { Text(if (ready) "Replace model" else "Import model") }
-                    }
+                OfflineModelSetup(modelReady, modelImporting, importModel) {
+                    vm.message.value = "Could not open a browser. Open the Dontree GitHub README to download ggml-tiny.bin."
                 }
                 ToggleRow("Thai pronunciation", "Rule-based phonetic spelling; approximate, not certified RTGS.", prefs.romanization, vm::romanization)
                 ToggleRow("English meaning", "An additional local speech-translation pass. Takes more time.", prefs.translation, vm::translation)
@@ -395,6 +452,49 @@ private fun SettingsScreen(vm: PlayerViewModel, prefs: Preferences, back: () -> 
         AlertDialog(onDismissRequest = { licenses = false }, title = { Text("Native library licenses") },
             text = { Text(notices, fontSize = 11.sp, modifier = Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) },
             confirmButton = { TextButton({ licenses = false }) { Text("Close") } })
+    }
+}
+
+@Composable
+private fun OfflineModelSetup(ready: Boolean, importing: Boolean, importModel: () -> Unit, onBrowserUnavailable: () -> Unit) {
+    val uriHandler = LocalUriHandler.current
+    val importLabel = if (ready) "Replace model" else "Import model"
+    Surface(color = Panel, shape = RoundedCornerShape(18.dp)) {
+        Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("1. Download the model", fontWeight = FontWeight.SemiBold)
+                Text("Open the download in your browser and save ggml-tiny.bin to Downloads. This model supports Thai.", color = Muted, fontSize = 14.sp)
+                OutlinedButton(
+                    onClick = {
+                        try {
+                            uriHandler.openUri(TinyModelUrl)
+                        } catch (_: IllegalArgumentException) {
+                            onBrowserUnavailable()
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Download Tiny model (78 MB)") }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("2. Import the file", fontWeight = FontWeight.SemiBold)
+                Text("Return here, tap $importLabel, and choose the .bin file from Downloads. Files ending in .en.bin are English-only.", color = Muted, fontSize = 14.sp)
+                Button(importModel, enabled = !importing, modifier = Modifier.fillMaxWidth()) { Text(importLabel) }
+                if (importing) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    Text("Importing and checking the model…", color = Muted, fontSize = 14.sp)
+                } else if (ready) {
+                    Text("Whisper model ready", color = Mint, fontWeight = FontWeight.SemiBold)
+                    Text("You can delete the original file from Downloads to free space.", color = Muted, fontSize = 14.sp)
+                } else {
+                    Text("Wait for ‘Whisper model ready’ before continuing.", color = Muted, fontSize = 14.sp)
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("3. Transcribe a song", fontWeight = FontWeight.SemiBold)
+                Text("Play a song and open the full player. Tap Lyrics agent, then Attach lyrics agent. Keep Dontree open while it works.", color = Muted, fontSize = 14.sp)
+                Text("After import, transcription works without an internet connection.", color = Muted, fontSize = 14.sp)
+            }
+        }
     }
 }
 

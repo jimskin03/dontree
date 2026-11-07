@@ -4,6 +4,14 @@ An Android music player with a Samsung Music-inspired dark interface and an atta
 
 This repository now contains an initial Android implementation. The original [architecture sketch](docs/ARCHITECTURE.md) remains the target; [implementation status](docs/IMPLEMENTATION.md) records the differences and unfinished work explicitly.
 
+## Offline transcription setup
+
+1. On your phone, download the **multilingual Tiny model** (`ggml-tiny.bin`, 78 MB). [Download from Whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin?download=true)
+2. In Dontree, open **Settings → Offline transcription → Import model**. Select the file from **Downloads** and wait for **Whisper model ready**.
+3. Play a song and tap the mini player to open the full player. Tap **Lyrics agent → Attach lyrics agent** and keep Dontree open while it works.
+
+Once the model is imported, you can transcribe songs offline. For a larger model or help finding the downloaded file, see the [full setup guide](docs/OFFLINE_TRANSCRIPTION.md).
+
 ## Included
 
 - MP3/OGG library scanning, search, album/artist browsing and favorites.
@@ -31,9 +39,8 @@ On Windows, use `gradlew.bat`. APK output: `app/build/outputs/apk/debug/app-debu
 1. Place MP3/OGG files in the phone's Music folder and allow music access. Tap Rescan if needed.
 2. Tap a track. Playback continues when the screen closes. Queue and Settings are available from the player/library.
 3. For existing timed lyrics, choose **Import LRC** while the intended song is selected.
-4. For generated lyrics, obtain a **multilingual** whisper.cpp GGML tiny/base `.bin` model from the [upstream model collection](https://huggingface.co/ggerganov/whisper.cpp). Do not use `.en` models. Import it in Settings; Dontree checks the format and loads it before replacing the previous model.
-5. Open **Lyrics agent → Attach lyrics agent**. Keep Dontree open during analysis; it may take several minutes and is limited to tracks up to 20 minutes. **Detach agent** cancels inference. Playback is independent of this work.
-6. Optional: enable online metadata, save an [AcoustID application key](https://acoustid.org/new-application), then tap **Identify song**. A confident match is displayed without rewriting your original file tags.
+4. For generated Thai lyrics, follow the [offline transcription setup](#offline-transcription-setup) above.
+5. To identify a song online, enable online metadata, save an [AcoustID application key](https://acoustid.org/new-application), then tap **Identify song**. A confident match is displayed without rewriting your original file tags.
 
 ## Privacy and quality
 
