@@ -346,8 +346,13 @@ private fun LyricsPanel(
         }
         Text("${agent.lyrics?.source ?: "Attach when you want to listen closer"}", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(vertical = 10.dp))
         if (agent.busy) {
-            LinearProgressIndicator(Modifier.fillMaxWidth())
+            if (agent.fraction > 0f) LinearProgressIndicator(progress = { agent.fraction }, modifier = Modifier.fillMaxWidth(), color = Purple, trackColor = Panel)
+            else LinearProgressIndicator(Modifier.fillMaxWidth(), color = Purple, trackColor = Panel)
             Text(agent.progress, color = Muted, modifier = Modifier.padding(vertical = 16.dp))
+        }
+        if (lines.isEmpty() && agent.busy) {
+            Text("Lines show up here as each section is recognized. Keep Dontree open.", color = Muted)
+            Spacer(Modifier.height(16.dp))
             OutlinedButton(stop) { Text("Detach agent") }
         } else if (lines.isEmpty()) {
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(vertical = 16.dp)) {
@@ -386,13 +391,17 @@ private fun LyricsPanel(
                     }
                 }
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                TextButton(if (modelReady) start else setupModel, enabled = !modelImporting) {
-                    Text(if (modelReady) "Run agent" else "Set up model")
+            if (agent.busy) {
+                OutlinedButton(stop, modifier = Modifier.padding(bottom = 16.dp)) { Text("Detach agent") }
+            } else {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    TextButton(if (modelReady) start else setupModel, enabled = !modelImporting) {
+                        Text(if (modelReady) "Run agent" else "Set up model")
+                    }
+                    TextButton(importLyrics) { Text("Replace with LRC") }
                 }
-                TextButton(importLyrics) { Text("Replace with LRC") }
+                Text("Pronunciation and beat alignment are approximate. Tap a line to seek.", color = Muted, fontSize = 10.sp, modifier = Modifier.padding(bottom = 16.dp))
             }
-            Text("Pronunciation and beat alignment are approximate. Tap a line to seek.", color = Muted, fontSize = 10.sp, modifier = Modifier.padding(bottom = 16.dp))
         }
     }
 }

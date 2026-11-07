@@ -42,6 +42,15 @@ class MusicTest {
         assertEquals(1200L, Timeline.snap(1200, listOf(1000, 1500)))
         assertEquals(100L, Timeline.snap(100, emptyList()))
     }
+    @Test fun `analysis percent leaves zero as soon as audio is counted`() {
+        assertEquals(0, AnalysisProgress.percent(0, 210_000))
+        assertEquals(0f, AnalysisProgress.fraction(0, 0))
+        assertEquals(7, AnalysisProgress.percent(15_000, 210_000))
+        assertEquals(0.07f, AnalysisProgress.fraction(15_000, 210_000))
+        assertEquals(1, AnalysisProgress.percent(1_000, 20 * 60_000))
+        assertEquals(99, AnalysisProgress.percent(180_000, 180_000))
+        assertEquals("Listening locally · 7%", AnalysisProgress.label("Listening locally", 15_000, 210_000))
+    }
     @Test fun `silence has no beats and synthetic clicks yield tempo`() {
         assertTrue(BeatTracker.detect(FloatArray(16000)).isEmpty())
         val pcm = FloatArray(64000)

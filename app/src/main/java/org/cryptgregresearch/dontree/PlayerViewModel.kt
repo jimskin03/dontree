@@ -12,7 +12,7 @@ import org.cryptgregresearch.dontree.core.*
 import org.cryptgregresearch.dontree.data.*
 import org.cryptgregresearch.dontree.playback.*
 
-data class AgentState(val busy: Boolean = false, val progress: String = "", val lyrics: Lyrics? = null, val error: String? = null)
+data class AgentState(val busy: Boolean = false, val progress: String = "", val fraction: Float = 0f, val lyrics: Lyrics? = null, val error: String? = null)
 
 @UnstableApi
 class PlayerViewModel(application: Application) : AndroidViewModel(application) {
@@ -33,6 +33,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     val identifying = MutableStateFlow(false)
     var pendingLyricsTarget: Song? = null
     private var agentJob: Job? = null
+    private var agentSongId: String? = null
+    private val agentUi = Any()
     private var importJob: Job? = null
     private var identifyJob: Job? = null
     private var scanJob: Job? = null
@@ -42,11 +44,16 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             combine(player.state.map { it.id }.distinctUntilChanged(), songs) { id, library ->
                 id to library.firstOrNull { it.id.toString() == id }
             }.distinctUntilChangedBy { (id, song) -> id to song?.revision }.collectLatest { (_, song) ->
-                stopAgent(); agentState.value = AgentState(); metadata.value = null
+                // Keep an analysis that is already running. Cancelling here used to drop it when
+                // playback moved on, which is while the first pass was still sitting at 0%.
+                val sameRunningSong = synchronized(agentUi) { agentSongId != null && agentSongId == song?.id?.toString() && agentJob?.isActive == true }
+                if (sameRunningSong) return@collectLatest
+                metadata.value = null
                 identifyJob?.cancel(); identifying.value = false
-                if (song != null) {
-                    val cached = app.music.dao.lyrics("import:${song.revision}")
-                    if (cached != null && !agentState.value.busy) agentState.value = AgentState(lyrics = LyricsJson.decode(cached.json))
+                val cached = song?.let { app.music.dao.lyrics("import:${it.revision}") ?: app.music.dao.lyrics("generated:${it.revision}") }
+                synchronized(agentUi) {
+                    if (agentSongId != null && agentSongId == song?.id?.toString() && agentJob?.isActive == true) return@collectLatest
+                    agentState.value = if (cached != null && agentSongId != song.id.toString()) AgentState(lyrics = LyricsJson.decode(cached.json)) else AgentState()
                 }
             }
         }
@@ -66,22 +73,38 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         if (agentState.value.busy || importing.value) return
         val song = currentSong() ?: return
         val previous = agentJob
-        agentState.value = AgentState(busy = true, progress = "Preparing local analysis…")
+        agent.onDetach()
+        previous?.cancel()
+        synchronized(agentUi) {
+            agentSongId = song.id.toString()
+            agentState.value = AgentState(busy = true, progress = "Preparing local analysis…")
+        }
         agentJob = viewModelScope.launch {
             previous?.join()
             try {
-                val lyrics = agent.onAttach(PlaybackSession(song, preferences.value.translation)) { progress ->
-                    if (player.state.value.id == song.id.toString()) agentState.value = agentState.value.copy(progress = progress)
+                val lyrics = agent.onAttach(PlaybackSession(song, preferences.value.translation)) { update ->
+                    synchronized(agentUi) {
+                        if (agentSongId == song.id.toString() && player.state.value.id == song.id.toString()) {
+                            agentState.value = AgentState(busy = true, progress = update.progress, fraction = update.fraction, lyrics = update.lyrics)
+                        }
+                    }
                 }
                 ensureActive()
-                if (player.state.value.id == song.id.toString()) agentState.value = AgentState(lyrics = lyrics)
+                synchronized(agentUi) {
+                    if (agentSongId == song.id.toString() && player.state.value.id == song.id.toString()) agentState.value = AgentState(lyrics = lyrics)
+                }
             } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { if (player.state.value.id == song.id.toString()) agentState.value = AgentState(error = e.message ?: "Local analysis failed") }
+            catch (e: Exception) {
+                synchronized(agentUi) {
+                    if (agentSongId == song.id.toString() && player.state.value.id == song.id.toString()) agentState.value = AgentState(error = e.message ?: "Local analysis failed")
+                }
+            }
         }
     }
     fun stopAgent() {
+        synchronized(agentUi) { agentSongId = null }
         agent.onDetach(); agentJob?.cancel()
-        agentState.value = agentState.value.copy(busy = false, progress = "")
+        agentState.value = agentState.value.copy(busy = false, progress = "", fraction = 0f)
     }
     fun importModel(uri: Uri) {
         if (importJob?.isActive == true) return

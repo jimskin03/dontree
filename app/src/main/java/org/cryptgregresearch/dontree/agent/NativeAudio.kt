@@ -7,5 +7,7 @@ object NativeAudio {
     external fun close(handle: Long)
     external fun cancel(handle: Long)
     external fun transcribe(handle: Long, pcm: FloatArray, translate: Boolean): String
+    /** 0–100 within the whisper call currently running on this handle. */
+    external fun progress(handle: Long): Int
     external fun fingerprint(pcm: FloatArray): String
 }

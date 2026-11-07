@@ -9,8 +9,9 @@ import org.cryptgregresearch.dontree.data.*
 import org.json.JSONArray
 
 data class PlaybackSession(val song: Song, val translate: Boolean)
+data class AgentUpdate(val progress: String, val fraction: Float, val lyrics: Lyrics? = null)
 interface PlayerAgent {
-    suspend fun onAttach(session: PlaybackSession, onProgress: (String) -> Unit): Lyrics
+    suspend fun onAttach(session: PlaybackSession, onProgress: (AgentUpdate) -> Unit): Lyrics
     fun onDetach()
 }
 
@@ -36,13 +37,14 @@ class LocalLyricsAgent(
 
     override fun onDetach() { synchronized(handleLock) { if (handle != 0L) NativeAudio.cancel(handle) } }
 
-    override suspend fun onAttach(session: PlaybackSession, onProgress: (String) -> Unit): Lyrics = work.withLock {
+    override suspend fun onAttach(session: PlaybackSession, onProgress: (AgentUpdate) -> Unit): Lyrics = work.withLock {
         withContext(Dispatchers.Default) {
             check(models.ready) { "Import a multilingual Whisper model in Settings before running the agent. You can also import an LRC file." }
             require(session.song.durationMs <= 20 * 60_000) { "Local analysis currently supports tracks up to 20 minutes" }
-            onProgress("Checking saved lyrics…")
+            onProgress(AgentUpdate("Checking saved lyrics…", 0f))
             val hash = repository.hash(session.song.uri)
             val key = "$hash:whisper-1.7.6:thai-v1:${models.revision}:${session.translate}"
+            val songKey = "generated:${session.song.revision}"
             repository.dao.lyrics(key)?.let { return@withContext LyricsJson.decode(it.json) }
             ensureActive()
             val localHandle = NativeAudio.open(models.file.absolutePath)
@@ -52,37 +54,106 @@ class LocalLyricsAgent(
                 val language = ThaiLanguagePack()
                 val lines = mutableListOf<LyricLine>()
                 val beats = mutableListOf<Long>()
+                var shownMs = 0L
+                fun snapshot(done: Boolean) = Lyrics(
+                    lines.filter { it.endMs > it.startMs }, beats,
+                    if (done) "Generated on device · Whisper Thai · approximate timing" else "Generated on device · partial",
+                )
+                fun report(doneMs: Long, phase: String) {
+                    shownMs = maxOf(shownMs, doneMs)
+                    val partial = snapshot(false).takeIf { it.lines.isNotEmpty() }
+                    onProgress(AgentUpdate(AnalysisProgress.label(phase, shownMs, session.song.durationMs), AnalysisProgress.fraction(shownMs, session.song.durationMs), partial))
+                }
+                suspend fun persistPartial() {
+                    val partial = snapshot(false)
+                    if (partial.lines.isNotEmpty()) repository.dao.saveLyrics(LyricsRow(songKey, LyricsJson.encode(partial)))
+                }
                 decoder.chunks(session.song.uri).collect { chunk ->
-                    ensureActive()
-                    val end = chunk.startMs + chunk.samples.size * 1000L / 16000
-                    onProgress("Listening locally · ${(chunk.startMs * 100 / session.song.durationMs.coerceAtLeast(1)).coerceAtMost(99)}%")
-                    // Suppress silence before ASR to reduce hallucinations in instrumental gaps.
-                    val rms = kotlin.math.sqrt(chunk.samples.sumOf { (it * it).toDouble() } / chunk.samples.size)
-                    val detected = BeatTracker.detect(chunk.samples, offsetMs = chunk.startMs)
-                    beats += detected.filter { beats.isEmpty() || it - beats.last() >= 250 }
-                    if (rms < 0.005) return@collect
-                    val thai = parse(NativeAudio.transcribe(localHandle, chunk.samples, false), chunk.startMs, end)
-                    ensureActive()
-                    val english = if (session.translate) {
-                        onProgress("Translating locally · ${(chunk.startMs * 100 / session.song.durationMs.coerceAtLeast(1)).coerceAtMost(99)}%")
-                        parse(NativeAudio.transcribe(localHandle, chunk.samples, true), chunk.startMs, end)
-                    } else emptyList()
-                    thai.forEach { line ->
-                        val translated = english.filter { it.startMs < line.endMs && it.endMs > line.startMs }.joinToString(" ") { it.text }
-                        val start = Timeline.snap(line.startMs, detected).coerceIn(chunk.startMs, line.endMs - 1)
-                        lines += line.copy(startMs = maxOf(start, lines.lastOrNull()?.endMs ?: 0),
-                            romanization = language.romanize(line.text), translation = translated)
+                    for (slice in slices(chunk)) {
+                        ensureActive()
+                        val sliceMs = slice.samples.size * 1000L / 16000
+                        val sliceEnd = slice.startMs + sliceMs
+                        // The percent is the end of the section now being analyzed. Whisper stays at 0
+                        // until that window finishes, which used to leave the whole song reading 0%.
+                        report(sliceEnd, "Listening locally")
+                        val rms = if (slice.samples.isEmpty()) 0.0 else kotlin.math.sqrt(slice.samples.sumOf { (it * it).toDouble() } / slice.samples.size)
+                        val detected = BeatTracker.detect(slice.samples, offsetMs = slice.startMs)
+                        beats += detected.filter { beats.isEmpty() || it - beats.last() >= 250 }
+                        var phase = "Listening locally"
+                        if (rms >= 0.005 && slice.samples.size >= 1600) {
+                            val thai = parse(transcribe(localHandle, slice.samples, false) { percent ->
+                                report(slice.startMs + sliceMs * percent / 100, "Listening locally")
+                            }, slice.startMs, sliceEnd)
+                            ensureActive()
+                            val from = lines.size
+                            thai.forEach { line ->
+                                val start = Timeline.snap(line.startMs, detected).coerceIn(slice.startMs, line.endMs - 1)
+                                lines += line.copy(startMs = maxOf(start, lines.lastOrNull()?.endMs ?: 0), romanization = language.romanize(line.text))
+                            }
+                            persistPartial()
+                            report(sliceEnd, phase)
+                            if (session.translate && thai.isNotEmpty()) {
+                                phase = "Translating locally"
+                                val english = parse(transcribe(localHandle, slice.samples, true) { percent ->
+                                    report(slice.startMs + sliceMs * percent / 100, phase)
+                                }, slice.startMs, sliceEnd)
+                                thai.forEachIndexed { index, line ->
+                                    val translated = english.filter { it.startMs < line.endMs && it.endMs > line.startMs }.joinToString(" ") { it.text }
+                                    if (translated.isNotEmpty()) lines[from + index] = lines[from + index].copy(translation = translated)
+                                }
+                                persistPartial()
+                            }
+                        }
+                        report(sliceEnd, phase)
                     }
                 }
                 ensureActive()
-                val result = Lyrics(lines.filter { it.endMs > it.startMs }, beats, "Generated on device · Whisper Thai · approximate timing")
+                val result = snapshot(true)
                 check(result.lines.isNotEmpty()) { "No vocals were recognized. Try a larger multilingual model or import lyrics." }
-                repository.dao.saveLyrics(LyricsRow(key, LyricsJson.encode(result)))
+                val encoded = LyricsJson.encode(result)
+                repository.dao.saveLyrics(LyricsRow(key, encoded))
+                repository.dao.saveLyrics(LyricsRow(songKey, encoded))
                 result
             } finally {
                 synchronized(handleLock) { handle = 0; NativeAudio.close(localHandle) }
             }
         }
+    }
+
+    /**
+     * whisper_full blocks the caller and only then advances its progress.
+     * Poll from this coroutine so detach still aborts the native pass, and wait for that pass
+     * to return before the handle is closed.
+     */
+    private suspend fun transcribe(handle: Long, pcm: FloatArray, translate: Boolean, onPercent: (Int) -> Unit): String = supervisorScope {
+        val task = async(Dispatchers.Default) { NativeAudio.transcribe(handle, pcm, translate) }
+        try {
+            var armed = false
+            while (task.isActive) {
+                val value = NativeAudio.progress(handle).coerceIn(0, 100)
+                if (!armed) armed = value == 0 else onPercent(value)
+                delay(250)
+            }
+            onPercent(100)
+            task.await()
+        } catch (e: CancellationException) {
+            val error = runCatching { task.await() }.exceptionOrNull()
+            if (error != null && error !is CancellationException && error.message != "Analysis cancelled") throw error
+            throw e
+        }
+    }
+
+    private fun slices(chunk: PcmChunk): List<PcmChunk> {
+        val sliceSamples = 16_000 * 15
+        if (chunk.samples.size <= sliceSamples) return listOf(chunk)
+        val result = ArrayList<PcmChunk>((chunk.samples.size + sliceSamples - 1) / sliceSamples)
+        var offset = 0
+        while (offset < chunk.samples.size) {
+            val count = minOf(sliceSamples, chunk.samples.size - offset)
+            result += PcmChunk(chunk.startMs + offset * 1000L / 16_000, chunk.samples.copyOfRange(offset, offset + count))
+            offset += count
+        }
+        return result
     }
 
     private fun parse(json: String, offset: Long, end: Long): List<LyricLine> {

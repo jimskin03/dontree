@@ -9,7 +9,11 @@
 #include <vector>
 #include <thread>
 
-struct Engine { whisper_context *context; std::atomic<bool> cancelled{false}; };
+struct Engine {
+    whisper_context *context;
+    std::atomic<bool> cancelled{false};
+    std::atomic<int> progress{0};
+};
 static void fail(JNIEnv *env, const char *message) { env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), message); }
 static jstring utf8(JNIEnv *env, const std::string &text) {
     auto bytes = env->NewByteArray(static_cast<jsize>(text.size()));
@@ -63,8 +67,18 @@ Java_org_cryptgregresearch_dontree_agent_NativeAudio_transcribe(JNIEnv *env, job
     params.n_threads = std::min(4u, std::max(1u, std::thread::hardware_concurrency()));
     params.print_realtime = false; params.print_progress = false; params.print_timestamps = false; params.print_special = false;
     params.token_timestamps = true; params.suppress_blank = true; params.suppress_nst = true;
+    // Sung audio fails Whisper's quality checks. The default temperature fallback then
+    // re-decodes the same window up to six times, so the first section stays at 0% for
+    // the whole song. One greedy pass, capped so a repetition loop cannot run unbound.
+    params.temperature_inc = -1.0f;
+    params.max_tokens = std::max(48, count * 12 / 16000);
     params.abort_callback = [](void *data) { return static_cast<Engine *>(data)->cancelled.load(); };
     params.abort_callback_user_data = engine;
+    engine->progress.store(0);
+    params.progress_callback = [](whisper_context *, whisper_state *, int progress, void *user) {
+        static_cast<Engine *>(user)->progress.store(progress);
+    };
+    params.progress_callback_user_data = engine;
     if (whisper_full(engine->context, params, samples.data(), count) != 0 || engine->cancelled.load()) {
         fail(env, engine->cancelled.load() ? "Analysis cancelled" : "Local transcription failed"); return nullptr;
     }
@@ -88,6 +102,12 @@ Java_org_cryptgregresearch_dontree_agent_NativeAudio_transcribe(JNIEnv *env, job
         json << "]}";
     }
     json << ']'; return utf8(env, json.str());
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_org_cryptgregresearch_dontree_agent_NativeAudio_progress(JNIEnv *, jobject, jlong handle) {
+    if (!handle) return 0;
+    return reinterpret_cast<Engine *>(handle)->progress.load();
 }
 
 extern "C" JNIEXPORT jstring JNICALL
