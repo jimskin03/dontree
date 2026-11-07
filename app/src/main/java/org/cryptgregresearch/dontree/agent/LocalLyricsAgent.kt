@@ -8,7 +8,7 @@ import org.cryptgregresearch.dontree.core.*
 import org.cryptgregresearch.dontree.data.*
 import org.json.JSONArray
 
-data class PlaybackSession(val song: Song, val translate: Boolean)
+data class PlaybackSession(val song: Song, val translate: Boolean, val timingOnly: Boolean = false)
 data class AgentUpdate(val progress: String, val fraction: Float, val lyrics: Lyrics? = null)
 interface PlayerAgent {
     suspend fun onAttach(session: PlaybackSession, onProgress: (AgentUpdate) -> Unit): Lyrics
@@ -36,6 +36,20 @@ class LocalLyricsAgent(
     private var handle = 0L
 
     override fun onDetach() { synchronized(handleLock) { if (handle != 0L) NativeAudio.cancel(handle) } }
+
+    suspend fun align(session: PlaybackSession, reference: Lyrics, onProgress: (AgentUpdate) -> Unit): Lyrics {
+        var previous: List<LyricLine> = emptyList()
+        var aligned = reference
+        val recognized = onAttach(session.copy(translate = false, timingOnly = true)) { update ->
+            val lines = update.lyrics?.lines.orEmpty()
+            if (lines != previous) {
+                aligned = ReferenceLyricsSync.align(reference, lines, update.lyrics?.beats.orEmpty())
+                previous = lines
+            }
+            onProgress(update.copy(progress = update.progress.replace("Listening locally", "Syncing found lyrics"), lyrics = aligned))
+        }
+        return ReferenceLyricsSync.align(reference, recognized.lines, recognized.beats)
+    }
 
     override suspend fun onAttach(session: PlaybackSession, onProgress: (AgentUpdate) -> Unit): Lyrics = work.withLock {
         withContext(Dispatchers.Default) {
@@ -66,7 +80,7 @@ class LocalLyricsAgent(
                 }
                 suspend fun persistPartial() {
                     val partial = snapshot(false)
-                    if (partial.lines.isNotEmpty()) repository.dao.saveLyrics(LyricsRow(songKey, LyricsJson.encode(partial)))
+                    if (!session.timingOnly && partial.lines.isNotEmpty()) repository.dao.saveLyrics(LyricsRow(songKey, LyricsJson.encode(partial)))
                 }
                 decoder.chunks(session.song.uri).collect { chunk ->
                     for (slice in slices(chunk)) {
@@ -112,7 +126,7 @@ class LocalLyricsAgent(
                 check(result.lines.isNotEmpty()) { "No vocals were recognized. Try a larger multilingual model or import lyrics." }
                 val encoded = LyricsJson.encode(result)
                 repository.dao.saveLyrics(LyricsRow(key, encoded))
-                repository.dao.saveLyrics(LyricsRow(songKey, encoded))
+                if (!session.timingOnly) repository.dao.saveLyrics(LyricsRow(songKey, encoded))
                 result
             } finally {
                 synchronized(handleLock) { handle = 0; NativeAudio.close(localHandle) }

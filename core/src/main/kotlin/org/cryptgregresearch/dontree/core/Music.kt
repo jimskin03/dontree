@@ -23,16 +23,19 @@ data class LyricLine(
     val startMs: Long, val endMs: Long, val text: String,
     val romanization: String = "", val translation: String = "", val words: List<Word> = emptyList(),
 )
-data class Lyrics(val lines: List<LyricLine>, val beats: List<Long> = emptyList(), val source: String = "Imported LRC")
+data class Lyrics(
+    val lines: List<LyricLine>,
+    val beats: List<Long> = emptyList(),
+    val source: String = "Imported LRC",
+    val instrumental: Boolean = false,
+) {
+    val fullySynced: Boolean get() = lines.isNotEmpty() && lines.all { it.startMs >= 0 && it.endMs > it.startMs }
+}
 
 object Timeline {
     fun activeIndex(lines: List<LyricLine>, positionMs: Long): Int {
-        var low = 0; var high = lines.lastIndex; var found = -1
-        while (low <= high) {
-            val middle = (low + high) ushr 1
-            if (lines[middle].startMs <= positionMs) { found = middle; low = middle + 1 } else high = middle - 1
-        }
-        return found.takeIf { it >= 0 && positionMs < lines[it].endMs } ?: -1
+        // Partially aligned web lyrics retain untimed lines in their original order.
+        return lines.indexOfLast { it.startMs >= 0 && positionMs >= it.startMs && positionMs < it.endMs }
     }
 
     // Do not drag vocals across a rest just to meet a beat.

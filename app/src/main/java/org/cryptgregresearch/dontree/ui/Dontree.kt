@@ -68,6 +68,7 @@ fun Dontree(vm: PlayerViewModel, permission: Boolean, onPermission: () -> Unit, 
     var screen by rememberSaveable { mutableStateOf("library") }
     var settingsBackScreen by rememberSaveable { mutableStateOf("library") }
     var lyricsOpen by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(lyricsOpen, playback.id) { if (lyricsOpen) vm.onLyricsOpen() }
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(message) { message?.let { snackbar.showSnackbar(it); vm.message.value = null } }
     LaunchedEffect(playback.error) { playback.error?.let { snackbar.showSnackbar(it) } }
@@ -118,6 +119,8 @@ fun Dontree(vm: PlayerViewModel, permission: Boolean, onPermission: () -> Unit, 
                     screen = "settings"
                 },
                 start = vm::startAgent,
+                localFallback = vm::localFallback,
+                syncLyrics = vm::syncLyrics,
                 stop = vm::stopAgent,
                 importLyrics = onLyricsImport,
                 seek = vm.player::seek,
@@ -279,7 +282,7 @@ private fun NowPlaying(vm: PlayerViewModel, player: PlayerState, preferences: Pr
                     Icon(Icons.Rounded.AutoAwesome, null, tint = Mint)
                     Column(Modifier.weight(1f).padding(start = 14.dp)) {
                         Text("Lyrics agent", fontWeight = FontWeight.SemiBold)
-                        Text(if (agent.busy) agent.progress else "Thai · pronunciation · English", color = Muted, fontSize = 12.sp)
+                        Text(if (agent.busy) agent.progress else "Find lyrics · sync with your song", color = Muted, fontSize = 12.sp)
                     }
                     Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = Muted)
                 }
@@ -325,6 +328,8 @@ private fun LyricsPanel(
     modelImporting: Boolean,
     setupModel: () -> Unit,
     start: () -> Unit,
+    localFallback: () -> Unit,
+    syncLyrics: () -> Unit,
     stop: () -> Unit,
     importLyrics: () -> Unit,
     seek: (Long) -> Unit,
@@ -342,49 +347,55 @@ private fun LyricsPanel(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Rounded.AutoAwesome, null, tint = Mint, modifier = Modifier.scale(pulse))
             Text("Lyrics agent", fontSize = 24.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f).padding(start = 12.dp))
-            Text("ON DEVICE", color = Mint, fontSize = 9.sp, letterSpacing = 1.sp)
+            Text("LYRICS", color = Mint, fontSize = 9.sp, letterSpacing = 1.sp)
         }
-        Text("${agent.lyrics?.source ?: "Attach when you want to listen closer"}", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(vertical = 10.dp))
+        Text(agent.lyrics?.source ?: "Match the song, then find its lyrics", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(vertical = 10.dp))
+        agent.error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
         if (agent.busy) {
             if (agent.fraction > 0f) LinearProgressIndicator(progress = { agent.fraction }, modifier = Modifier.fillMaxWidth(), color = Purple, trackColor = Panel)
             else LinearProgressIndicator(Modifier.fillMaxWidth(), color = Purple, trackColor = Panel)
             Text(agent.progress, color = Muted, modifier = Modifier.padding(vertical = 16.dp))
         }
         if (lines.isEmpty() && agent.busy) {
-            Text("Lines show up here as each section is recognized. Keep Dontree open.", color = Muted)
+            Text("Finding lyrics or syncing them with this recording. Keep Dontree open.", color = Muted)
             Spacer(Modifier.height(16.dp))
             OutlinedButton(stop) { Text("Detach agent") }
         } else if (lines.isEmpty()) {
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(vertical = 16.dp)) {
-                Text("Generate Thai lyrics", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                Text(if (agent.lyrics?.instrumental == true) "Instrumental recording" else "Find this song's lyrics", fontSize = 28.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(12.dp))
                 Text(
                     when {
                         modelImporting -> "Wait for the model import to finish in Settings."
-                        !modelReady -> "Download and import a Whisper model once. Dontree can then transcribe songs offline."
-                        else -> agent.error ?: "Keep Dontree open while it transcribes this song. Processing can take several minutes."
+                        agent.lyrics?.instrumental == true -> "The lyrics service marks this recording as instrumental. You can search again if this is a different version."
+                        !prefs.lyricsOnline -> "Find existing lyrics online using the song title and artist. Song recognition also sends a fingerprint if enabled in Settings."
+                        else -> "Existing lyrics come first. A local model adds timing to untimed lyrics and can transcribe the song if no lyrics are found."
                     },
                     color = Muted,
                 )
                 Spacer(Modifier.height(20.dp))
                 Button(
-                    onClick = if (modelReady) start else setupModel,
-                    enabled = !modelImporting && (!modelReady || player.id != null),
+                    onClick = start,
+                    enabled = !modelImporting && player.id != null,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(when {
                         modelImporting -> "Importing model…"
-                        modelReady -> "Attach lyrics agent"
-                        else -> "Set up offline transcription"
+                        else -> "Find lyrics online"
                     })
                 }
                 TextButton(importLyrics, modifier = Modifier.fillMaxWidth()) { Text("Import a timed LRC file") }
+                if (modelReady) {
+                    TextButton(localFallback, enabled = !modelImporting, modifier = Modifier.fillMaxWidth()) { Text("Use local transcription fallback") }
+                } else {
+                    TextButton(setupModel, modifier = Modifier.fillMaxWidth()) { Text("Set up local sync and fallback") }
+                }
             }
         } else {
             LazyColumn(state = list, modifier = Modifier.weight(1f), contentPadding = PaddingValues(vertical = 16.dp)) {
                 itemsIndexed(lines) { index, line ->
-                    val color by animateColorAsState(if (index == active) Color.White else Muted.copy(alpha = 0.65f), label = "lyric")
-                    Column(Modifier.fillMaxWidth().clickable { seek(line.startMs) }.padding(vertical = 16.dp)) {
+                    val color by animateColorAsState(if (index == active || line.startMs < 0) Color.White else Muted.copy(alpha = 0.65f), label = "lyric")
+                    Column(Modifier.fillMaxWidth().clickable(enabled = line.startMs >= 0 && line.endMs > line.startMs) { seek(line.startMs) }.padding(vertical = 16.dp)) {
                         Text(line.text, color = color, fontSize = if (index == active) 27.sp else 23.sp, lineHeight = 36.sp, fontWeight = FontWeight.SemiBold)
                         if (prefs.romanization && line.romanization.isNotEmpty()) Text(line.romanization, color = if (index == active) Purple else Muted, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
                         if (prefs.translation && line.translation.isNotEmpty()) Text(line.translation, color = if (index == active) Mint else Muted, fontSize = 14.sp, modifier = Modifier.padding(top = 5.dp))
@@ -395,12 +406,15 @@ private fun LyricsPanel(
                 OutlinedButton(stop, modifier = Modifier.padding(bottom = 16.dp)) { Text("Detach agent") }
             } else {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    TextButton(if (modelReady) start else setupModel, enabled = !modelImporting) {
-                        Text(if (modelReady) "Run agent" else "Set up model")
-                    }
+                    TextButton(start, enabled = !modelImporting) { Text("Find lyrics again") }
                     TextButton(importLyrics) { Text("Replace with LRC") }
                 }
-                Text("Pronunciation and beat alignment are approximate. Tap a line to seek.", color = Muted, fontSize = 10.sp, modifier = Modifier.padding(bottom = 16.dp))
+                if (agent.lyrics?.fullySynced == false) {
+                    TextButton(if (modelReady) syncLyrics else setupModel, enabled = !modelImporting) {
+                        Text(if (modelReady) "Sync with local model" else "Set up local sync")
+                    }
+                }
+                Text("Tap a timed line to seek. Untimed lines stay visible. Local timing is approximate.", color = Muted, fontSize = 10.sp, modifier = Modifier.padding(bottom = 16.dp))
             }
         }
     }
@@ -417,6 +431,8 @@ private fun SettingsScreen(
     importModel: () -> Unit,
 ) {
     var key by remember(prefs.acoustIdKey) { mutableStateOf(prefs.acoustIdKey) }
+    var lyricsEndpoint by remember(prefs.lyricsEndpoint) { mutableStateOf(prefs.lyricsEndpoint) }
+    var lyricsApiKey by remember(prefs.lyricsApiKey) { mutableStateOf(prefs.lyricsApiKey) }
     var confirmClear by remember { mutableStateOf(false) }
     var licenses by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -424,16 +440,27 @@ private fun SettingsScreen(
         item { Header("Settings", back) }
         item {
             Column(Modifier.padding(24.dp)) {
-                SectionLabel("LYRICS AGENT")
+                SectionLabel("LYRICS SEARCH")
+                ToggleRow("Find lyrics online", "Searches when you open Lyrics agent. Sends the song title and artist to LRCLIB or your custom service. Saved lyrics are available offline.", prefs.lyricsOnline, vm::lyricsOnline)
+                Text("LRCLIB works without an API key. To use your own service, enter an HTTPS API base URL that supports LRCLIB's search format.", color = Muted, fontSize = 13.sp)
+                OutlinedTextField(lyricsEndpoint, { lyricsEndpoint = it }, label = { Text("Custom lyrics API URL (optional)") },
+                    placeholder = { Text("https://example.com/api") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                if (lyricsEndpoint.isNotBlank()) {
+                    OutlinedTextField(lyricsApiKey, { lyricsApiKey = it }, label = { Text("Lyrics API key (optional)") },
+                        visualTransformation = PasswordVisualTransformation(), singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Text("The key is sent as a Bearer token to this service.", color = Muted, fontSize = 12.sp)
+                }
+                TextButton({ vm.lyricsService(lyricsEndpoint, if (lyricsEndpoint.isBlank()) "" else lyricsApiKey) }) { Text("Save lyrics service") }
+                Spacer(Modifier.height(20.dp)); SectionLabel("LOCAL SYNC AND FALLBACK")
                 Text("Offline transcription", fontSize = 26.sp, lineHeight = 34.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(16.dp))
                 OfflineModelSetup(modelReady, modelImporting, importModel) {
                     vm.message.value = "Could not open a browser. Open the Dontree GitHub README to download ggml-tiny.bin."
                 }
                 ToggleRow("Thai pronunciation", "Rule-based phonetic spelling; approximate, not certified RTGS.", prefs.romanization, vm::romanization)
-                ToggleRow("English meaning", "An additional local speech-translation pass. Takes more time.", prefs.translation, vm::translation)
+                ToggleRow("English meaning", "Adds English meaning during local fallback transcription. Takes more time.", prefs.translation, vm::translation)
                 Spacer(Modifier.height(20.dp)); SectionLabel("OPTIONAL ONLINE METADATA")
-                ToggleRow("Identify songs online", "Only when you tap Identify song. Sends an audio fingerprint and duration to AcoustID; requests artwork from Cover Art Archive. No audio is uploaded.", prefs.online, vm::online)
+                ToggleRow("Identify songs online", "Matches the recording before lyrics search when a key is saved, or when you tap Identify song. Sends a fingerprint and duration to AcoustID and requests cover art.", prefs.online, vm::online)
                 if (prefs.online) {
                     OutlinedTextField(key, { key = it }, label = { Text("AcoustID application key") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, modifier = Modifier.fillMaxWidth())
                     TextButton({ vm.apiKey(key); vm.message.value = "Application key saved" }) { Text("Save key") }
@@ -499,9 +526,9 @@ private fun OfflineModelSetup(ready: Boolean, importing: Boolean, importModel: (
                 }
             }
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("3. Transcribe a song", fontWeight = FontWeight.SemiBold)
-                Text("Play a song and open the full player. Tap Lyrics agent, then Attach lyrics agent. Keep Dontree open while it works.", color = Muted, fontSize = 14.sp)
-                Text("After import, transcription works without an internet connection.", color = Muted, fontSize = 14.sp)
+                Text("3. Find lyrics, then sync", fontWeight = FontWeight.SemiBold)
+                Text("Open Lyrics agent and tap Find lyrics online. Existing timestamps are used directly. The model helps sync untimed lyrics, or transcribes only when lyrics cannot be found.", color = Muted, fontSize = 14.sp)
+                Text("Use local transcription fallback in the lyrics panel to work completely offline.", color = Muted, fontSize = 14.sp)
             }
         }
     }

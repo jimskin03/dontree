@@ -24,6 +24,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     private val decoder = AudioDecoder(app)
     private val agent = LocalLyricsAgent(app.music, model, decoder)
     private val identifier = OnlineMetadata(app.music, decoder)
+    private val lyricsSearch = OnlineLyrics()
     val agentState = MutableStateFlow(AgentState())
     val modelReady = MutableStateFlow(model.ready)
     val importing = MutableStateFlow(false)
@@ -50,10 +51,11 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 if (sameRunningSong) return@collectLatest
                 metadata.value = null
                 identifyJob?.cancel(); identifying.value = false
-                val cached = song?.let { app.music.dao.lyrics("import:${it.revision}") ?: app.music.dao.lyrics("generated:${it.revision}") }
+                val cached = song?.let { app.music.dao.lyrics("import:${it.revision}")
+                    ?: app.music.dao.lyrics("resolved:${it.revision}") ?: app.music.dao.lyrics("generated:${it.revision}") }
                 synchronized(agentUi) {
                     if (agentSongId != null && agentSongId == song?.id?.toString() && agentJob?.isActive == true) return@collectLatest
-                    agentState.value = if (cached != null && agentSongId != song.id.toString()) AgentState(lyrics = LyricsJson.decode(cached.json)) else AgentState()
+                    agentState.value = if (cached != null) AgentState(lyrics = LyricsJson.decode(cached.json)) else AgentState()
                 }
             }
         }
@@ -70,6 +72,28 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
     fun startAgent() {
+        val options = preferences.value
+        if (!options.lyricsOnline) {
+            viewModelScope.launch { app.settings.lyricsOnline(true) }
+        }
+        runLyrics(options.copy(lyricsOnline = true), onlineSearch = true)
+    }
+    fun onLyricsOpen() {
+        viewModelScope.launch {
+            val song = currentSong() ?: return@launch
+            if (agentState.value.busy || agentState.value.lyrics != null) return@launch
+            val cached = app.music.dao.lyrics("import:${song.revision}") ?: app.music.dao.lyrics("resolved:${song.revision}")
+            if (currentSong()?.revision != song.revision || agentState.value.busy) return@launch
+            if (cached != null) agentState.value = AgentState(lyrics = LyricsJson.decode(cached.json))
+            else if (preferences.value.lyricsOnline) startAgent()
+        }
+    }
+    fun localFallback() { runLyrics(preferences.value, onlineSearch = false) }
+    fun syncLyrics() {
+        val reference = agentState.value.lyrics ?: return
+        runLyrics(preferences.value, onlineSearch = false, reference = reference)
+    }
+    private fun runLyrics(options: Preferences, onlineSearch: Boolean, reference: Lyrics? = null) {
         if (agentState.value.busy || importing.value) return
         val song = currentSong() ?: return
         val previous = agentJob
@@ -77,26 +101,70 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         previous?.cancel()
         synchronized(agentUi) {
             agentSongId = song.id.toString()
-            agentState.value = AgentState(busy = true, progress = "Preparing local analysis…")
+            agentState.value = AgentState(busy = true, progress = "Preparing lyrics…", lyrics = reference)
         }
         agentJob = viewModelScope.launch {
             previous?.join()
             try {
-                val lyrics = agent.onAttach(PlaybackSession(song, preferences.value.translation)) { update ->
+                val report: (AgentUpdate) -> Unit = { update ->
                     synchronized(agentUi) {
                         if (agentSongId == song.id.toString() && player.state.value.id == song.id.toString()) {
                             agentState.value = AgentState(busy = true, progress = update.progress, fraction = update.fraction, lyrics = update.lyrics)
                         }
                     }
                 }
+                val session = PlaybackSession(song, options.translation)
+                val lyrics = when {
+                    reference != null -> agent.align(session, reference, report)
+                    !onlineSearch -> agent.onAttach(session, report)
+                    else -> LyricsWorkflow(
+                        identify = { original ->
+                            val cached = app.music.dao.metadata(app.music.hash(original.uri))
+                            val match = cached ?: if (options.online && options.acoustIdKey.isNotBlank()) {
+                                try { identifier.identify(original, options.acoustIdKey) }
+                                catch (error: CancellationException) { throw error }
+                                catch (error: Exception) {
+                                    if (original.artist == "Unknown artist") throw error
+                                    null
+                                }
+                            } else null
+                            if (player.state.value.id == song.id.toString()) metadata.value = match
+                            original.copy(title = match?.title ?: original.title, artist = match?.artist ?: original.artist)
+                        },
+                        search = { matched ->
+                            val found = lyricsSearch.find(matched, LyricsServiceConfig(options.lyricsEndpoint, options.lyricsApiKey))
+                            if (found != null) {
+                                val decorated = withContext(Dispatchers.Default) {
+                                    val language = ThaiLanguagePack()
+                                    found.copy(lines = found.lines.map { it.copy(romanization = language.romanize(it.text)) })
+                                }
+                                app.music.dao.saveLyrics(LyricsRow("resolved:${song.revision}", LyricsJson.encode(decorated)))
+                                report(AgentUpdate("Lyrics found", 0f, decorated))
+                                decorated
+                            } else null
+                        },
+                        align = { matched, found -> agent.align(PlaybackSession(matched, false), found, report) },
+                        transcribe = { agent.onAttach(session, report) },
+                        hasModel = { model.ready },
+                    ).resolve(song) { stage ->
+                        synchronized(agentUi) {
+                            if (agentSongId == song.id.toString() && player.state.value.id == song.id.toString()) {
+                                agentState.value = agentState.value.copy(busy = true, progress = stage)
+                            }
+                        }
+                    }
+                }
                 ensureActive()
+                app.music.dao.saveLyrics(LyricsRow("resolved:${song.revision}", LyricsJson.encode(lyrics)))
                 synchronized(agentUi) {
                     if (agentSongId == song.id.toString() && player.state.value.id == song.id.toString()) agentState.value = AgentState(lyrics = lyrics)
                 }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 synchronized(agentUi) {
-                    if (agentSongId == song.id.toString() && player.state.value.id == song.id.toString()) agentState.value = AgentState(error = e.message ?: "Local analysis failed")
+                    if (agentSongId == song.id.toString() && player.state.value.id == song.id.toString()) {
+                        agentState.value = AgentState(lyrics = agentState.value.lyrics, error = e.message ?: "Lyrics lookup failed. Try again or use the local fallback.")
+                    }
                 }
             }
         }
@@ -149,10 +217,24 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
     fun favorite(id: Long) { viewModelScope.launch { app.settings.favorite(id) } }
     fun online(value: Boolean) {
-        if (!value) { identifyJob?.cancel(); metadata.value = null }
+        if (!value) { identifyJob?.cancel(); metadata.value = null; stopAgent() }
         viewModelScope.launch { app.settings.online(value) }
     }
     fun apiKey(value: String) { viewModelScope.launch { app.settings.apiKey(value) } }
+    fun lyricsOnline(value: Boolean) {
+        if (!value) stopAgent()
+        viewModelScope.launch { app.settings.lyricsOnline(value) }
+    }
+    fun lyricsService(endpoint: String, key: String) {
+        viewModelScope.launch {
+            try {
+                LyricsServiceConfig(endpoint, key).validate()
+                stopAgent()
+                app.settings.lyricsService(endpoint, key)
+                message.value = "Lyrics service saved"
+            } catch (error: IllegalArgumentException) { message.value = error.message }
+        }
+    }
     fun romanization(value: Boolean) { viewModelScope.launch { app.settings.romanization(value) } }
     fun translation(value: Boolean) { viewModelScope.launch { app.settings.translation(value) } }
     fun clearLyrics() {
